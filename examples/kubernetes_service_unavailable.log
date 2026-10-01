@@ -1,0 +1,6 @@
+2026-09-30T09:25:32Z ingress-nginx-controller[845]: [error] upstream prematurely closed connection while reading response header from upstream, service "prod/orders-api" has no active endpoints
+2026-09-30T09:25:32Z ingress-nginx-controller[845]: 503 Service Unavailable: no endpoints available for service "prod/orders-api"
+2026-09-30T09:25:33Z kube-proxy[2011]: Service prod/orders-api has no endpoints
+Service:         orders-api
+Namespace:       prod
+Endpoints:       <none>

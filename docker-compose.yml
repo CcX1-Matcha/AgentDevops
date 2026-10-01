@@ -1,0 +1,26 @@
+services:
+  sre-diagnosis:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      KNOWLEDGE_PATH: /app/knowledge_base/incidents.json
+      OPS_DATA_PATH: /app/data
+      OPS_DEMO_ENABLED: ${OPS_DEMO_ENABLED:-true}
+      OPS_API_TOKEN: ${OPS_API_TOKEN:?Set OPS_API_TOKEN in .env before starting}
+      OPS_READ_TOKEN: ${OPS_READ_TOKEN:-}
+      ALERT_WEBHOOK_TOKEN: ${ALERT_WEBHOOK_TOKEN:-}
+      LLM_MODE: ${LLM_MODE:-local}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      CONTEXT_CONFIG_PATH: ${CONTEXT_CONFIG_PATH:-}
+      OPS_SOURCES_PATH: ${OPS_SOURCES_PATH:-}
+    volumes:
+      - ops-data:/app/data
+      - ./config:/app/config:ro
+      # Mount production log directories read-only and use /logs/... paths.
+      # - /var/log/nginx:/logs/nginx:ro
+    restart: unless-stopped
+volumes:
+  ops-data:

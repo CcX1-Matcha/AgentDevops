@@ -1,0 +1,9 @@
+2026-09-30T09:20:21Z kubelet[2314]: Container worker in pod analytics-worker-5f7c9d4d8b-7htqk terminated with reason OOMKilled
+2026-09-30T09:20:21Z kubelet[2314]: Container worker in pod analytics-worker-5f7c9d4d8b-7htqk exited with code 137
+Name:           analytics-worker-5f7c9d4d8b-7htqk
+Namespace:      prod
+Last State:     Terminated
+  Reason:       OOMKilled
+  Exit Code:    137
+Limits:
+  memory:       512Mi

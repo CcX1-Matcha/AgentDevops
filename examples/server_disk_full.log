@@ -1,0 +1,4 @@
+Sep 29 10:02:10 sre-node-01 app[1427]: ERROR write /var/log/orders/application.log: No space left on device
+Sep 29 10:02:11 sre-node-01 systemd-journald[411]: Failed to write entry: No space left on device
+Sep 29 10:02:12 sre-node-01 app[1427]: ERROR cannot create temporary file /var/tmp/report-2942.tmp: errno 28 (ENOSPC)
+Sep 29 10:02:15 sre-node-01 app[1427]: WARN request failed because audit record could not be persisted

@@ -1,0 +1,24 @@
+[
+  {
+    "name": "Nginx error log",
+    "path": "/var/log/nginx/error.log",
+    "source": "nginx",
+    "service": "orders-gateway",
+    "environment": "production",
+    "instance": "node-01",
+    "enabled": true,
+    "read_existing": false,
+    "poll_interval_seconds": 2
+  },
+  {
+    "name": "Kubernetes events collector",
+    "path": "/logs/kubernetes/events.log",
+    "source": "kubernetes",
+    "service": "orders-api",
+    "environment": "production",
+    "instance": "cluster-01",
+    "enabled": true,
+    "read_existing": false,
+    "poll_interval_seconds": 2
+  }
+]

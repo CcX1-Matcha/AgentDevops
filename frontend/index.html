@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#ffffff" />
+  <title>SRE Agent · 运维事件中心</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="主导航">
+      <a class="brand" href="/" aria-label="SRE Agent 首页"><span class="brand-symbol"><i data-lucide="activity"></i></span><span>SRE Agent<small>运维诊断工作台</small></span></a>
+      <div class="workspace-label">WORKSPACE <span>本地工作区</span></div>
+      <nav class="nav-links">
+        <button class="nav-item active" data-view="incidents" aria-label="故障事件" title="故障事件" aria-current="page"><i data-lucide="inbox"></i><span>故障事件</span><b id="nav-active-count">0</b></button>
+        <button class="nav-item" data-view="sources" aria-label="数据源" title="数据源"><i data-lucide="radio"></i><span>数据源</span><b id="nav-source-count">0</b></button>
+        <button class="nav-item" data-view="knowledge" aria-label="知识库" title="知识库"><i data-lucide="book-open"></i><span>知识库</span></button>
+        <button class="nav-item" data-view="audit" aria-label="审计记录" title="审计记录"><i data-lucide="history"></i><span>审计记录</span></button>
+      </nav>
+      <div class="sidebar-bottom"><span class="agent-mode"><i data-lucide="workflow"></i><span>ReAct + RAG<small id="agent-mode">连接中</small></span></span><button class="nav-item" id="open-manual" aria-label="手动日志诊断" title="手动日志诊断"><i data-lucide="terminal"></i><span>手动日志诊断</span><i data-lucide="arrow-up-right"></i></button><div class="operator"><span class="avatar">SR</span><span>本地值班员<small>SRE 工作区</small></span></div></div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar"><div class="breadcrumb"><span>运维中心</span><i data-lucide="chevron-right"></i><strong id="view-name">故障事件</strong></div><div class="topbar-tools"><span id="health" class="health"><span class="status-dot"></span>连接中</span><button id="refresh-all" class="icon-button" title="刷新数据" aria-label="刷新数据"><i data-lucide="refresh-cw"></i></button><button id="open-auth" class="icon-button" title="访问凭据" aria-label="访问凭据"><i data-lucide="key-round"></i></button><a href="/docs" class="icon-button" title="接口文档" aria-label="接口文档" target="_blank" rel="noopener"><i data-lucide="braces"></i></a></div></header>
+      <main>
+        <div id="global-error" class="alert error-alert hidden" role="alert"></div>
+        <section id="view-incidents" class="view">
+          <div class="page-title"><div><h1>故障事件</h1><p class="subtitle"><span id="monitor-dot" class="status-dot"></span><span id="monitor-status">读取监控状态</span><span class="separator">·</span><span id="last-updated">尚未更新</span></p></div><button class="button primary" id="add-source-from-incidents"><i data-lucide="plus"></i>接入数据源</button></div>
+          <div class="metrics" aria-label="事件概况"><div class="metric"><span>待处理事件</span><strong id="metric-active">—</strong><small><span class="metric-dot red"></span>需要关注</small></div><div class="metric"><span>已诊断事件</span><strong id="metric-diagnosed">—</strong><small><i data-lucide="scan-line"></i>自动根因分析</small></div><div class="metric"><span>原始告警</span><strong id="metric-alerts">—</strong><small id="metric-aggregation">等待采集</small></div><div class="metric"><span>在线数据源</span><strong id="metric-sources">—</strong><small id="metric-source-health">等待采集</small></div></div>
+          <div class="demo-band"><span class="demo-tag"><i data-lucide="flask-conical"></i>演示环境</span><label class="sr-only" for="demo-scenario">演示故障类型</label><select id="demo-scenario"><option value="nginx">Nginx · upstream 502</option><option value="docker">Docker · 内存耗尽</option><option value="kubernetes">Kubernetes · CrashLoop</option><option value="server">Linux · 磁盘空间不足</option></select><button id="inject-demo" class="button small"><i data-lucide="zap"></i>注入演示异常</button><span id="demo-feedback" class="muted" role="status"></span></div>
+          <div class="events-toolbar"><div class="search-field"><i data-lucide="search"></i><input id="incident-search" type="search" placeholder="搜索事件、服务、实例" aria-label="搜索事件、服务、实例" /></div><label class="sr-only" for="environment-filter">环境</label><select id="environment-filter"><option value="">全部环境</option></select><label class="sr-only" for="severity-filter">严重度</label><select id="severity-filter"><option value="">全部级别</option><option value="critical">严重</option><option value="error">错误</option><option value="warning">警告</option><option value="info">信息</option></select><label class="sr-only" for="status-filter">事件状态</label><select id="status-filter"><option value="active">待处理</option><option value="">全部状态</option><option value="awaiting_confirmation">待确认</option><option value="acknowledged">已确认</option><option value="resolved">已解决</option><option value="failed">诊断失败</option></select><span id="incident-count" class="table-count">0 个事件</span></div>
+          <div class="incident-workspace"><div class="event-list"><div class="table-scroll"><table class="event-table"><thead><tr><th>级别</th><th>事件 / 服务</th><th>状态</th><th class="count-cell">次数</th><th>最近更新</th></tr></thead><tbody id="incident-rows"><tr><td colspan="5" class="table-empty">正在读取事件…</td></tr></tbody></table></div><div class="list-footer"><span id="list-status">持续同步事件</span><span><span class="status-dot"></span>自动刷新</span></div></div><aside id="incident-detail" class="incident-detail" aria-label="事件详情"><div class="detail-empty"><span class="empty-icon"><i data-lucide="scan-line"></i></span><h2>等待故障事件</h2><p>暂无待处理事件</p></div></aside></div>
+        </section>
+        <section id="view-sources" class="view hidden"><div class="page-title"><div><h1>数据源</h1><p class="subtitle" id="source-summary">读取采集状态</p></div><button id="add-source" class="button primary"><i data-lucide="plus"></i>接入数据源</button></div><div class="section-heading"><h2>日志采集</h2><span id="source-total" class="muted"></span></div><div class="table-scroll source-table-wrap"><table class="source-table"><thead><tr><th>名称 / 日志路径</th><th>服务 / 环境</th><th>采集状态</th><th>最近采集</th><th>监控</th><th class="actions-cell">操作</th></tr></thead><tbody id="source-rows"><tr><td colspan="6" class="table-empty">正在读取数据源…</td></tr></tbody></table></div></section>
+        <section id="view-knowledge" class="view hidden"><div class="page-title"><div><h1>知识库</h1><p class="subtitle" id="knowledge-summary">运维手册与故障处置记录</p></div><div class="page-tools"><button id="import-knowledge" class="button"><i data-lucide="upload"></i>导入知识</button><button id="refresh-knowledge" class="icon-button" title="刷新知识库" aria-label="刷新知识库"><i data-lucide="refresh-cw"></i></button></div></div><div class="knowledge-toolbar"><div class="search-field"><i data-lucide="search"></i><input id="knowledge-search" type="search" placeholder="搜索故障类型、组件或 Runbook" aria-label="搜索知识库" /></div><button id="search-knowledge" class="button"><i data-lucide="search"></i>检索</button><span id="knowledge-count" class="muted"></span></div><div id="knowledge-list" class="knowledge-list"><div class="empty-state">正在读取知识库…</div></div></section>
+        <section id="view-audit" class="view hidden"><div class="page-title"><div><h1>审计记录</h1><p class="subtitle">事件处理与工具调用</p></div><button id="refresh-audit" class="icon-button" title="刷新审计记录" aria-label="刷新审计记录"><i data-lucide="refresh-cw"></i></button></div><div class="table-scroll"><table class="audit-table"><thead><tr><th>时间</th><th>操作人</th><th>操作</th><th>对象</th><th>结果</th></tr></thead><tbody id="audit-rows"><tr><td colspan="5" class="table-empty">正在读取审计记录…</td></tr></tbody></table></div></section>
+      </main>
+    </div>
+  </div>
+  <dialog id="source-dialog" class="modal">
+    <form id="source-form">
+      <div class="modal-heading"><div><h2>接入日志数据源</h2><p>本地工作区</p></div><button type="button" class="icon-button" data-close="source-dialog" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
+      <div class="form-grid">
+        <label>名称<input name="name" required maxlength="120" placeholder="例如：订单服务 Nginx" /></label>
+        <label>日志类型<select name="source"><option value="auto">自动识别</option><option value="nginx">Nginx</option><option value="docker">Docker</option><option value="kubernetes">Kubernetes</option><option value="server">Linux 服务器</option></select></label>
+        <label class="span-2">日志文件路径<input name="path" required maxlength="2000" placeholder="C:\logs\nginx\error.log 或 /var/log/nginx/error.log" /></label>
+        <label>服务名称<input name="service" required maxlength="120" placeholder="例如：order-api" /></label>
+        <label>环境<input name="environment" required maxlength="120" placeholder="例如：production" /></label>
+        <label>主机 / 实例<input name="instance" required maxlength="200" placeholder="例如：node-01" /></label>
+        <label>采集间隔（秒）<input name="poll_interval_seconds" type="number" min="0.25" max="300" step="0.25" value="5" required /></label>
+      </div>
+      <div class="form-options"><label><input name="enabled" type="checkbox" checked />立即启用监控</label><label><input name="read_existing" type="checkbox" />读取已有日志</label></div>
+      <p id="source-form-error" class="form-error" role="alert"></p>
+      <div class="modal-footer"><button type="button" class="button" data-close="source-dialog">取消</button><button type="submit" class="button primary"><i data-lucide="plus"></i>接入数据源</button></div>
+    </form>
+  </dialog>
+  <dialog id="manual-dialog" class="modal wide-modal"><div class="modal-heading"><div><h2>手动日志诊断</h2><p>独立诊断</p></div><button class="icon-button" data-close="manual-dialog" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div><form id="manual-form"><div class="manual-toolbar"><label>日志来源<select id="manual-source"><option value="auto">自动识别</option><option value="server">Linux 服务器</option><option value="nginx">Nginx</option><option value="docker">Docker</option><option value="kubernetes">Kubernetes</option></select></label><label class="sr-only" for="manual-example">样例</label><select id="manual-example"><option value="">选择样例日志</option><option value="nginx_502.log" data-source="nginx">Nginx 502</option><option value="docker_oom.log" data-source="docker">Docker OOM</option><option value="kubernetes_crash_loop.log" data-example="kubernetes_crash_loop.log" data-source="kubernetes">K8s CrashLoop</option><option value="server_disk_full.log" data-source="server">Linux 磁盘满</option></select></div><label class="sr-only" for="manual-logs">日志内容</label><textarea id="manual-logs" spellcheck="false" required placeholder="粘贴日志内容、容器日志或 Kubernetes Events"></textarea><label class="sr-only" for="manual-context">补充上下文</label><input id="manual-context" placeholder="服务名称、近期变更、影响范围（可选）" /><p id="manual-error" class="form-error" role="alert"></p><div class="modal-footer"><button type="submit" id="manual-diagnose" class="button primary"><i data-lucide="scan-line"></i>诊断日志</button></div></form><div id="manual-result" class="manual-result hidden"></div></dialog>
+  <dialog id="resolve-dialog" class="modal"><form id="resolve-form"><div class="modal-heading"><div><h2>记录解决结果</h2><p id="resolve-incident-label"></p></div><button type="button" class="icon-button" data-close="resolve-dialog" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div><label>实际根因 / 处置结果<textarea id="resolution" required maxlength="10000" placeholder="记录实际根因、人工执行的操作及恢复结果"></textarea></label><p id="resolve-error" class="form-error" role="alert"></p><div class="modal-footer"><button type="button" class="button" data-close="resolve-dialog">取消</button><button type="submit" class="button primary"><i data-lucide="check-check"></i>标记已解决</button></div></form></dialog>
+  <dialog id="auth-dialog" class="modal"><form id="auth-form"><div class="modal-heading"><h2>访问凭据</h2><button type="button" class="icon-button" data-close="auth-dialog" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div><label class="field-label" for="access-token">访问令牌</label><input id="access-token" type="password" autocomplete="off" placeholder="本地工作区可留空" /><p id="auth-error" class="form-error" role="alert"></p><div class="modal-footer"><button type="button" class="button" id="clear-token">清除</button><button type="submit" class="button primary"><i data-lucide="check"></i>保存</button></div></form></dialog>
+  <dialog id="import-dialog" class="modal wide-modal"><form id="import-form"><div class="modal-heading"><div><h2>导入故障知识</h2><p>结构化运维手册</p></div><button type="button" class="icon-button" data-close="import-dialog" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div><label class="field-label" for="knowledge-file">知识文件（JSON）</label><input id="knowledge-file" type="file" accept=".json,application/json" /><label class="field-label" for="knowledge-json">知识文档</label><textarea id="knowledge-json" required spellcheck="false" placeholder='[{"id":"order-db-timeout","title":"订单数据库连接超时","source":"server","root_cause":"数据库连接池已耗尽","symptoms":["connection timeout"],"tags":["database"],"steps":["检查连接池活跃连接与等待请求"],"commands":["ss -s"],"source_urls":["https://wiki.example.com/runbook"],"trust_level":"reviewed"}]'></textarea><p id="import-error" class="form-error" role="alert"></p><div class="modal-footer"><button type="button" class="button" data-close="import-dialog">取消</button><button type="submit" class="button primary"><i data-lucide="upload"></i>导入知识</button></div></form></dialog>
+  <dialog id="group-dialog" class="modal wide-modal">
+    <form id="group-form">
+      <div class="modal-heading"><div><h2 id="group-title">合并事件</h2><p id="group-target"></p></div><button type="button" class="icon-button" data-close="group-dialog" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
+      <div id="group-options" class="group-options"></div>
+      <p id="group-error" class="form-error" role="alert"></p>
+      <div class="modal-footer"><span id="group-selection" class="muted"></span><button type="button" class="button" data-close="group-dialog">取消</button><button type="submit" id="group-submit" class="button primary" disabled><i data-lucide="combine"></i>合并事件</button></div>
+    </form>
+  </dialog>
+  <div id="toast" class="toast hidden" role="status"></div>
+  <script src="/static/vendor/lucide.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

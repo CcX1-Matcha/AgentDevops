@@ -1,0 +1,22 @@
+{
+  "documents": [
+    {
+      "id": "user-orders-db-connections",
+      "title": "Orders database connection pool exhausted",
+      "source": "server",
+      "root_cause": "Candidate: application connection pool exhausted. Check active connections, waiting requests and database health before confirming.",
+      "failure_types": ["database_connection_exhausted"],
+      "symptoms": ["orders database connection pool exhausted"],
+      "steps": [
+        "Check the active and waiting connection metrics during the incident window.",
+        "Compare application deployment changes and database connection limits.",
+        "Have the operator apply an approved remedy and verify request latency and error rate."
+      ],
+      "commands": [],
+      "tags": ["orders", "database", "connection pool"],
+      "source_urls": ["https://wiki.example.com/runbooks/orders-db"],
+      "updated_at": "2026-10-01",
+      "trust_level": "personal"
+    }
+  ]
+}

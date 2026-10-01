@@ -1,0 +1,4 @@
+2026-09-29T09:45:00.123456789+08:00 container oom 91cbea5f0712 (image=example/orders-api:1.4.2, name=orders-api)
+2026-09-29T09:45:00.234567890+08:00 container die 91cbea5f0712 (exitCode=137, image=example/orders-api:1.4.2, name=orders-api)
+{"timestamp":"2026-09-29T09:45:01+08:00","container":"orders-api","State":{"Status":"exited","OOMKilled":true,"ExitCode":137,"Error":"","FinishedAt":"2026-09-29T09:45:00+08:00"},"HostConfig":{"Memory":536870912}}
+Sep 29 09:45:00 sre-node-01 kernel: Memory cgroup out of memory: Killed process 28411 (java) total-vm:2219980kB, anon-rss:503912kB, file-rss:0kB, shmem-rss:0kB

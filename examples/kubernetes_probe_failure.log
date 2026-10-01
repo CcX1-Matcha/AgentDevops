@@ -1,0 +1,5 @@
+2026-09-30T09:15:47Z kubelet[2314]: Warning Unhealthy pod/catalog-5d8b7f9c76-qm8n2: Readiness probe failed: HTTP probe failed with statuscode: 503
+2026-09-30T09:15:48Z kubelet[2314]: Warning Unhealthy pod/catalog-5d8b7f9c76-qm8n2: Liveness probe failed: Get "http://10.42.1.17:8080/healthz": context deadline exceeded (Client.Timeout exceeded while awaiting headers)
+2026-09-30T09:15:49Z kubelet[2314]: Normal Killing pod/catalog-5d8b7f9c76-qm8n2: Container catalog failed liveness probe, will be restarted
+Probe:          livenessProbe
+Endpoint:       /healthz:8080

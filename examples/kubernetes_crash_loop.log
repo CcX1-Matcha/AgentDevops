@@ -1,0 +1,9 @@
+2026-09-30T09:01:12Z kubelet[2314]: Warning BackOff 45s restarting failed container api in pod orders-api-6f9d8f7c6b-x2k4m_prod(4b7b0f2d)
+2026-09-30T09:01:12Z kubelet[2314]: Warning BackOff restarting failed container api in pod orders-api-6f9d8f7c6b-x2k4m_prod
+Name:           orders-api-6f9d8f7c6b-x2k4m
+Namespace:      prod
+Reason:         CrashLoopBackOff
+Last State:     Terminated
+  Reason:       Error
+  Exit Code:    1
+Restart Count:  7

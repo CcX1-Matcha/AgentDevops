@@ -1,0 +1,4 @@
+2026/09/29 09:41:01 [error] 32#32: *182 connect() failed (111: Connection refused) while connecting to upstream, client: 192.0.2.15, server: api.example.test, request: "GET /api/orders HTTP/1.1", upstream: "http://127.0.0.1:8080/api/orders", host: "api.example.test"
+192.0.2.15 - - [29/Sep/2026:09:41:01 +0800] "GET /api/orders HTTP/1.1" 502 157 "-" "synthetic-monitor/1.0" request_time=0.001 upstream_response_time=0.000
+2026/09/29 09:41:04 [error] 32#32: *184 connect() failed (111: Connection refused) while connecting to upstream, client: 192.0.2.15, server: api.example.test, request: "GET /health HTTP/1.1", upstream: "http://127.0.0.1:8080/health", host: "api.example.test"
+192.0.2.15 - - [29/Sep/2026:09:41:04 +0800] "GET /health HTTP/1.1" 502 157 "-" "synthetic-monitor/1.0" request_time=0.001 upstream_response_time=0.000

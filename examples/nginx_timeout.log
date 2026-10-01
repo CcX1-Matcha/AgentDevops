@@ -1,0 +1,2 @@
+2026/09/29 11:30:00 [error] 33#33: *314 upstream timed out (110: Connection timed out) while reading response header from upstream, client: 192.0.2.20, server: api.example.test, request: "GET /api/reports HTTP/1.1", upstream: "http://127.0.0.1:8080/api/reports", host: "api.example.test"
+192.0.2.20 - - [29/Sep/2026:11:30:00 +0800] "GET /api/reports HTTP/1.1" 504 167 "-" "synthetic-monitor/1.0" request_time=60.001 upstream_response_time=60.000

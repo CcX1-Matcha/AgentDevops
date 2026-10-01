@@ -1,0 +1,3 @@
+Sep 29 13:22:01 sre-node-01 sshd[24111]: Failed password for invalid user deploy from 198.51.100.7 port 42318 ssh2
+Sep 29 13:22:04 sre-node-01 sshd[24111]: error: maximum authentication attempts exceeded for invalid user deploy from 198.51.100.7 port 42318 ssh2 [preauth]
+Sep 29 13:22:10 sre-node-01 sshd[24118]: Failed publickey for sre from 198.51.100.7 port 42329 ssh2

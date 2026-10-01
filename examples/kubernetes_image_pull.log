@@ -1,0 +1,4 @@
+2026-09-30T09:05:03Z kubelet[2314]: Warning Failed pod/payments-api-7ccf7c8c75-r9w2p: Failed to pull image "registry.example.com/payments/api:v4.2.1": rpc error: code = NotFound desc = manifest unknown
+2026-09-30T09:05:03Z kubelet[2314]: Warning Failed pod/payments-api-7ccf7c8c75-r9w2p: Error: ErrImagePull
+2026-09-30T09:05:33Z kubelet[2314]: Warning BackOff pod/payments-api-7ccf7c8c75-r9w2p: Back-off pulling image "registry.example.com/payments/api:v4.2.1"
+Status:         ImagePullBackOff

@@ -1,0 +1,7 @@
+2026-09-30T09:10:14Z default-scheduler[1120]: 0/5 nodes are available: 3 Insufficient memory, 1 node(s) had untolerated taint {dedicated= gpu:NoSchedule}, 1 node(s) didn't match Pod's node affinity/selector.
+2026-09-30T09:10:14Z default-scheduler[1120]: preemption: 0/5 nodes are available: 5 No preemption victims found for incoming pod.
+Name:             report-worker-289d4
+Namespace:        batch
+Status:           Pending
+Events:
+  Warning  FailedScheduling  0/5 nodes are available: 3 Insufficient memory.
