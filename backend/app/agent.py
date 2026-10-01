@@ -40,6 +40,7 @@ _TYPE_LABELS = {
     "database_slow_query": "数据库慢查询",
     "certificate_error": "TLS 证书或握手异常",
     "message_queue_backlog": "消息队列积压",
+    "managed_cache_pressure": "托管可重建缓存压力",
 }
 
 
@@ -83,6 +84,9 @@ class ReActAgent:
         query = " ".join([dominant, " ".join(x.message for x in parsed if x.failure_type != "normal")[:3000], context or ""])
         detected_source = source_summary(parsed)
         knowledge = self.store.search(query, dominant, max_knowledge, source=detected_source if detected_source in {"server", "nginx", "docker", "kubernetes"} else None)
+        if dominant == "managed_cache_pressure":
+            compatible = {document.id for document in self.store.documents if dominant in document.failure_types}
+            knowledge = [match for match in knowledge if match.id in compatible]
         trace.append(TraceEvent(iteration=len(trace) + 1, action="retrieve_knowledge", action_input=query[:500], observation=f"检索到 {len(knowledge)} 条知识；首选 {knowledge[0].id if knowledge else '无'}"))
 
         severity = self._severity(parsed)
@@ -138,10 +142,12 @@ class ReActAgent:
 
     @staticmethod
     def _dominant_type(items: list[ParsedLog]) -> str:
-        actionable = [x.failure_type for x in items if x.severity in ("critical", "error") or (x.severity == "warning" and x.failure_type != "degraded_service")]
-        if not actionable:
-            return "degraded_service" if any(x.severity == "warning" for x in items) else "normal"
-        return Counter(actionable).most_common(1)[0][0]
+        for severity in ("critical", "error", "warning"):
+            actionable = [item.failure_type for item in items if item.severity == severity and
+                          (severity != "warning" or item.failure_type != "degraded_service")]
+            if actionable:
+                return Counter(actionable).most_common(1)[0][0]
+        return "degraded_service" if any(x.severity == "warning" for x in items) else "normal"
 
     @staticmethod
     def _severity(items: list[ParsedLog]) -> str:
@@ -159,6 +165,7 @@ class ReActAgent:
     @staticmethod
     def _steps(kind: str, source: str) -> list[DiagnosisStep]:
         common = {
+            "managed_cache_pressure": [("核对托管缓存范围", "只读确认缓存实际路径、占用、基线与服务归属；仅缓存压力告警不能证明全磁盘或 inode 耗尽。", "du -sh <managed-cache-path>", "取得明确的托管缓存路径和占用，未把告警等同于磁盘满载"), ("核对保留与回滚方案", "人工确认缓存可重建、保留要求、重建代价及回滚方案；仅通过已审核剧本按权限处置并核查业务恢复。", None, "保留与回滚要求明确，业务恢复需独立验证")],
             "out_of_memory": [("确认 OOM 事件", "确认内核是否触发 OOM killer，并定位被杀进程。", "dmesg -T | egrep -i 'oom|killed process'", "看到 OOM 时间、进程及内存 cgroup 信息"), ("检查内存压力", "核对主机和容器 limit、工作集及近期流量变化。", "free -h && docker stats --no-stream", "定位内存消耗最大的进程或容器")],
             "disk_full": [("确认容量和 inode", "检查挂载点容量与 inode，区分数据增长还是 inode 耗尽。", "df -h && df -i", "确认满载的挂载点"), ("安全释放空间", "按保留策略清理日志、临时文件并验证服务写入。", "du -xhd1 /var 2>/dev/null | sort -h", "空间回落且服务恢复写入")],
             "upstream_unavailable": [("检查上游进程", "确认应用进程存活并监听 Nginx 配置的端口。", "ss -lntp && systemctl status <service>", "端口处于 LISTEN 且服务为 active"), ("核对网络策略", "检查容器网络、DNS 和安全组，确认 Nginx 到上游可达。", "curl -sv http://<upstream>/health", "健康检查返回 2xx")],

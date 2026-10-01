@@ -228,6 +228,21 @@
     "trust_level": "curated_runbook"
   },
   {
+    "id": "server-managed-cache-pressure",
+    "title": "托管可重建临时缓存使用量超过基线",
+    "source": "server",
+    "severity": "warning",
+    "tags": ["managed_cache_pressure", "managed temporary cache usage above baseline", "managed cache", "托管可重建缓存", "临时缓存", "缓存压力"],
+    "failure_types": ["managed_cache_pressure"],
+    "symptoms": ["managed temporary cache usage above baseline", "托管可重建临时缓存使用量超过基线", "托管可重建缓存压力升高"],
+    "root_cause": "日志仅说明声明为托管且可重建的临时缓存使用量超过基线，需要核对增长原因、服务归属与清理策略；没有全磁盘或 inode 耗尽证据，不能仅凭这一告警认定磁盘已满。",
+    "steps": ["只读确认受影响服务、实例、实际托管缓存路径、占用和告警基线，不把普通数据目录当作缓存。", "读取挂载点容量和 inode 使用量，确认是否另有磁盘耗尽、OOM 或写入错误；若存在，应提升为人工高风险排查。", "由工程师核对缓存确实可重建、保留策略、使用中的文件、重建代价及回滚方案，不删除业务数据或共享目录。", "仅在审核的固定目标剧本中按账号权限审批处置；没有匹配剧本时采用人工变更流程，不根据诊断文本执行清理命令。", "独立核查缓存占用、业务探测、错误率与后续告警；未取得业务恢复证据时保持恢复状态未知。"],
+    "commands": ["du -sh <managed-cache-path>", "df -h", "df -i", "findmnt --target <managed-cache-path>"],
+    "references": ["https://www.freedesktop.org/software/systemd/man/latest/file-hierarchy.html#Variable%20Data"],
+    "updated_at": "2026-10-02",
+    "trust_level": "curated_runbook"
+  },
+  {
     "id": "server-queue-backlog",
     "title": "消息队列积压、消费滞后或未确认消息增长",
     "source": "server",

@@ -1,7 +1,9 @@
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const icon = (name) => `<i data-lucide="${esc(name)}"></i>`;
-const state = { view: 'incidents', incidents: [], sources: [], selectedId: null, selected: null, tab: 'diagnosis', loading: false, detailSignature: '', busy: false, grouping: null };
+const state = { view: 'incidents', incidents: [], sources: [], accounts: [], selectedId: null, selected: null, tab: 'diagnosis', loading: false, detailSignature: '', busy: false, grouping: null, user: null, bootstrap: false, authReady: false, epoch: 0, remediation: null, learning: null, executionPlan: null };
+const roleNames = { guest: '访客', viewer: '观察员', junior: '初级工程师', senior: '高级工程师', admin: '管理员', operator: '本地手动权限' };
+const planStatusNames = { pending: '待确认', running: '执行中', succeeded: '执行成功', failed: '执行失败', verification_failed: '执行完成 · 恢复验证失败', unknown: '执行结果未知', stale: '计划已失效', simulated: '演示完成 · 未修改真实环境' };
 const severityNames = { critical: '严重', error: '错误', warning: '警告', info: '信息' };
 const statusNames = { new: '已接入', diagnosing: '诊断中', awaiting_confirmation: '待确认', acknowledged: '已确认', resolved: '已解决', failed: '诊断失败' };
 const sourceNames = { auto: '自动识别', server: 'Linux', nginx: 'Nginx', docker: 'Docker', kubernetes: 'Kubernetes', k8s: 'Kubernetes', mixed: '混合日志', unknown: '未知来源' };
@@ -24,15 +26,24 @@ function diagnosis(incident) { return incident?.diagnosis || null; }
 function incidentTitle(incident) { return diagnosis(incident)?.summary || incident.title || incident.failure_type || '待诊断故障事件'; }
 function detailTab(key, label) { return `<button type="button" role="tab" aria-label="${esc(label)}" aria-selected="${state.tab === key}" aria-controls="detail-panel" class="${state.tab === key ? 'active' : ''}" data-detail-tab="${esc(key)}">${esc(label)}</button>`; }
 function errorMessage(detail) {
-  if (typeof detail === 'string') return detail;
-  if (Array.isArray(detail)) return detail.map((item) => `${(item.loc || []).filter((part) => part !== 'body').join('.')}: ${item.msg}`).join('；');
+  if (typeof detail === 'string') return ({ 'Invalid username or password.': '账号或密码错误，或账号已停用。', 'A valid access token or account session is required.': '登录已失效，请重新登录。', 'Your role does not have permission for this operation.': '当前账号无权执行此操作。', 'Your account does not have permission for this operation.': '当前账号无权执行此操作。', 'The last enabled administrator cannot be disabled or demoted.': '最后一个启用的管理员不能停用或降级。', 'Username must contain 3-64 letters, digits, dots, underscores or hyphens.': '账号需为 3 至 64 位字母、数字、点、下划线或连字符。', 'Password must contain between 9 and 1024 characters.': '密码长度需为 9 至 1024 个字符。', 'The first administrator must be initialized from this machine.': '首次管理员需要在部署本机初始化。' }[detail.replace(/^Value error, /, '')] || detail);
+  if (Array.isArray(detail)) return detail.map((item) => `${(item.loc || []).filter((part) => part !== 'body').join('.')}: ${errorMessage(item.msg)}`).join('；');
   return detail?.message || '请求失败，请稍后重试。';
 }
 async function api(path, options = {}) {
+  const epoch = state.epoch;
   const token = readToken();
   const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers } });
   const type = response.headers.get('content-type') || '';
   const data = type.includes('json') ? await response.json() : await response.text();
+  if (epoch !== state.epoch) throw new Error('账号已切换，请重新操作。');
+  if (response.status === 401 && path !== '/api/auth/login') {
+    try { storeToken(''); } catch {}
+    state.epoch++;
+    state.user = null;
+    clearPrivateData();
+    updateIdentity();
+  }
   if (!response.ok) throw new Error(errorMessage(typeof data === 'object' ? data.detail || data : data));
   return data;
 }
@@ -44,7 +55,68 @@ function toast(message, error = false) {
   toast.timer = setTimeout(() => $('toast').classList.add('hidden'), error ? 7000 : 4000);
 }
 function globalError(message = '') { $('global-error').textContent = message; $('global-error').classList.toggle('hidden', !message); }
-function sourceForm() { $('source-form').reset(); $('source-form-error').textContent = ''; $('source-dialog').showModal(); }
+function can(permission) { return Boolean(state.user?.authenticated && state.user.permissions?.includes(permission)); }
+function need(permission) { if (can(permission)) return true; toast('当前账号无权执行此操作。', true); return false; }
+function clearPrivateData() {
+  state.incidents = []; state.sources = []; state.accounts = []; state.selected = null; state.selectedId = null;
+  state.learning = null; state.remediation = null; state.executionPlan = null; state.detailSignature = ''; state.grouping = null;
+  $('incident-rows').innerHTML = '<tr><td colspan="5" class="table-empty">登录后查看故障事件</td></tr>';
+  $('incident-detail').innerHTML = '<div class="detail-empty"><span class="empty-icon">' + icon('lock-keyhole') + '</span><h2>等待账号登录</h2></div>';
+  $('source-rows').innerHTML = '<tr><td colspan="6" class="table-empty">登录后查看数据源</td></tr>';
+  $('knowledge-list').innerHTML = ''; $('audit-rows').innerHTML = ''; $('campaign-list').innerHTML = ''; $('learning-rows').innerHTML = ''; $('accounts-rows').innerHTML = '';
+  $('manual-result').innerHTML = ''; $('manual-result').classList.add('hidden'); $('manual-logs').value = ''; $('manual-context').value = '';
+  ['metric-active', 'metric-diagnosed', 'metric-alerts', 'metric-sources', 'learning-count', 'learning-useful', 'learning-rate', 'learning-review'].forEach((id) => $(id).textContent = '—');
+  ['nav-active-count', 'nav-source-count', 'nav-campaign-count'].forEach((id) => $(id).textContent = '0');
+  $('incident-count').textContent = '0 个事件'; $('list-status').textContent = '等待账号登录'; $('source-summary').textContent = '等待账号登录'; $('source-total').textContent = '';
+  $('knowledge-count').textContent = ''; $('knowledge-summary').textContent = '运维手册与故障处置记录'; $('accounts-summary').textContent = '等待账号登录';
+  $('last-updated').textContent = '尚未更新'; $('demo-feedback').textContent = ''; $('monitor-status').textContent = '等待账号登录';
+  $('metric-aggregation').textContent = '等待采集'; $('metric-source-health').textContent = '等待采集'; $('group-options').innerHTML = ''; $('execute-review').innerHTML = '';
+  ['source-form', 'resolve-form', 'account-form', 'import-form', 'manual-form'].forEach((id) => $(id).reset());
+  $('knowledge-search').value = ''; $('incident-search').value = ''; $('severity-filter').value = ''; $('status-filter').value = 'active';
+  filters();
+  ['resolve-dialog', 'group-dialog', 'source-dialog', 'manual-dialog', 'import-dialog', 'account-dialog', 'execute-dialog'].forEach((id) => { if ($(id).open) $(id).close(); });
+}
+function updateIdentity() {
+  const user = state.user;
+  const name = user?.authenticated ? user.username || roleNames[user.role] : '未登录';
+  const role = roleNames[user?.role] || '访客';
+  $('identity-name').textContent = name; $('identity-role').textContent = role;
+  $('operator-name').innerHTML = `${esc(name)}<small id="operator-role">${esc(role)}</small>`;
+  $('operator-avatar').textContent = user?.authenticated ? String(name).slice(0, 2).toUpperCase() : '—';
+  $('open-auth').title = user?.authenticated ? `${name} · ${role}` : '账号登录';
+  $('logout').classList.toggle('hidden', !user?.authenticated);
+  $('session-notice').classList.toggle('hidden', can('incident:read') && !state.bootstrap);
+  $('session-notice-text').textContent = state.bootstrap ? '本机尚未创建管理员账号' : '请登录查看运维事件';
+  $('session-login').innerHTML = `${icon(state.bootstrap ? 'user-plus' : 'log-in')}${state.bootstrap ? '创建管理员' : '登录'}`;
+  const permissions = { 'add-source': 'source:manage', 'add-source-from-incidents': 'source:manage', 'inject-demo': 'incident:write', 'import-knowledge': 'knowledge:import', 'create-account': 'account:manage' };
+  Object.entries(permissions).forEach(([id, permission]) => { $(id).disabled = !can(permission); $(id).title = can(permission) ? '' : '当前账号无操作权限'; });
+  document.querySelectorAll('[data-permission]').forEach((element) => {
+    const allowed = can(element.dataset.permission);
+    if (element.dataset.view === 'accounts') element.classList.toggle('hidden', !allowed);
+    else element.disabled = !allowed;
+  });
+  document.querySelectorAll('[data-view]').forEach((element) => { if (element.dataset.view !== 'accounts') element.disabled = !can('incident:read'); });
+  if (state.view === 'accounts' && !can('account:manage')) showView('incidents');
+  if (can('incident:read') && !state.selectedId && !state.incidents.length) renderIncidentRows();
+  icons();
+}
+async function loadIdentity() {
+  const previous = state.user;
+  const user = await api('/api/auth/me');
+  state.user = user; state.bootstrap = Boolean(user.bootstrap_available); state.authReady = true;
+  if (previous && (previous.username !== user.username || previous.role !== user.role || Boolean(previous.authenticated) !== Boolean(user.authenticated))) { state.epoch++; clearPrivateData(); }
+  updateIdentity();
+}
+function openAuth() {
+  $('auth-form').reset(); $('auth-error').textContent = ''; $('access-token').value = '';
+  $('auth-title').textContent = state.bootstrap ? '创建本机管理员' : '登录运维账号';
+  $('auth-caption').textContent = state.bootstrap ? '仅支持本机首次初始化' : state.user?.authenticated ? `当前：${state.user.username} · ${roleNames[state.user.role] || state.user.role}` : 'SRE 工作区';
+  $('auth-password').minLength = state.bootstrap ? 9 : 1;
+  $('auth-password').autocomplete = state.bootstrap ? 'new-password' : 'current-password';
+  $('auth-submit').innerHTML = `${icon(state.bootstrap ? 'user-plus' : 'log-in')}${state.bootstrap ? '创建并登录' : '登录'}`;
+  $('auth-dialog').showModal(); icons();
+}
+function sourceForm() { if (!need('source:manage')) return; $('source-form').reset(); $('source-form-error').textContent = ''; $('source-dialog').showModal(); }
 
 async function health() {
   try {
@@ -96,14 +168,19 @@ function filteredIncidents() {
   });
 }
 function renderIncidentRows() {
+  const readable = can('incident:read');
   const current = filteredIncidents();
   $('incident-count').textContent = `${current.length} 个事件`;
   $('incident-rows').innerHTML = current.length ? current.map((item) => `<tr data-incident="${esc(item.id)}" class="${item.id === state.selectedId ? 'selected' : ''}" tabindex="0" aria-label="查看 ${esc(incidentTitle(item))}"><td>${severity(item.severity)}</td><td><span class="event-title">${esc(incidentTitle(item))}</span><span class="event-meta"><span>${esc(item.service || '未知服务')}</span><span>·</span><span>${esc(item.environment || '未标记环境')}</span>${item.is_demo ? '<span class="demo-label">演示</span>' : ''}</span></td><td>${status(item.status)}</td><td class="count-cell">${esc(item.occurrences ?? 1)}</td><td class="time-cell">${esc(time(item.last_seen || item.updated_at || item.first_seen))}<small>${esc(sourceNames[item.source] || item.source || '')}</small></td></tr>`).join('') : `<tr><td colspan="5" class="table-empty"><span class="empty-icon">${icon('check-check')}</span><strong>${state.incidents.length ? '没有符合条件的事件' : '暂无故障事件'}</strong><p>${state.incidents.length ? '调整筛选条件后重试' : '数据源正在等待新日志'}</p></td></tr>`;
-  $('list-status').textContent = `共 ${state.incidents.length} 个事件 · ${current.length} 个符合筛选`;
+  $('list-status').textContent = readable ? `共 ${state.incidents.length} 个事件 · ${current.length} 个符合筛选` : '等待账号登录';
+  if (!state.selectedId) $('incident-detail').innerHTML = `<div class="detail-empty"><span class="empty-icon">${icon(readable ? 'scan-line' : 'lock-keyhole')}</span><h2>${readable ? '等待故障事件' : '等待账号登录'}</h2><p>${readable ? state.incidents.length ? '暂无符合条件的事件' : '暂无故障事件' : '登录后查看故障详情'}</p></div>`;
+  if (!readable) $('incident-rows').innerHTML = '<tr><td colspan="5" class="table-empty">登录后查看故障事件</td></tr>';
   icons();
 }
 async function loadIncidents() {
+  if (!can('incident:read')) return;
   state.incidents = items(await api('/api/incidents?limit=200'));
+  if (state.selectedId && !state.incidents.some((item) => item.id === state.selectedId)) { state.selectedId = null; state.selected = null; state.learning = null; state.remediation = null; state.detailSignature = ''; }
   filters();
   renderIncidentRows();
   const visible = filteredIncidents();
@@ -192,12 +269,32 @@ function traceHtml(incident) {
   const trace = diagnosis(incident)?.trace || [];
   return `<div class="detail-section"><div class="section-heading"><h3>${icon('workflow')}工具调用轨迹</h3><span class="muted">${trace.length} 步</span></div>${trace.length ? trace.map((item, index) => `<div class="trace-item">${item.timestamp ? `<time>${esc(time(item.timestamp))}</time>` : ''}<strong>${index + 1}. ${esc(toolNames[item.action || item.tool] || item.action || item.tool || '工具调用')}</strong>${item.hypothesis || item.reasoning || item.thought ? `<p>${esc(item.hypothesis || item.reasoning || item.thought)}</p>` : ''}${item.expected_result ? `<p>验证目标：${esc(item.expected_result)}</p>` : ''}<p>${esc(item.observation || item.summary || '')}</p>${item.judgment ? `<p>判断：${esc(item.judgment)}</p>` : ''}${item.action_input || item.input ? `<details><summary>调用参数</summary><pre>${esc(typeof (item.action_input || item.input) === 'object' ? JSON.stringify(item.action_input || item.input, null, 2) : item.action_input || item.input)}</pre></details>` : ''}</div>`).join('') : '<p class="muted">尚无工具调用记录</p>'}</div>${timelineHtml(incident.timeline || [])}`;
 }
+function executionMode(mode) { return { demo: '演示 · 不修改真实环境', http: '真实环境 · HTTP 执行器' }[mode] || mode || '尚未配置'; }
+function targetHtml(target = {}) {
+  return `<dl class="target-grid"><dt>服务</dt><dd>${esc(target.service || '未提供')}</dd><dt>环境</dt><dd>${esc(target.environment || '未提供')}</dd><dt>实例</dt><dd>${esc(target.instance || '未提供')}</dd></dl>`;
+}
+function planHtml(plan) {
+  const verification = plan.verification;
+  const recovery = verification?.healthy === true ? '恢复验证通过' : verification?.healthy === false ? '恢复验证失败，仍需人工排查' : '恢复状态未知，请人工核查';
+  return `<div class="remediation-plan"><div class="plan-heading"><strong>${esc(plan.name || plan.playbook_id)}</strong><span class="plan-status ${esc(plan.status)}">${esc(planStatusNames[plan.status] || plan.status)}</span></div><p class="step-description">${esc(executionMode(plan.mode))} · ${esc(time(plan.created_at, true))}</p>${targetHtml(plan.target)}${plan.status === 'pending' ? `<p class="plan-expiry">有效至 ${esc(time(plan.expires_at, true))}</p>` : ''}${['running', 'pending', 'stale'].includes(plan.status) ? '' : `<p class="recovery-result ${verification?.healthy === false ? 'error' : ''}">${esc(recovery)}${verification?.note ? `：${esc(verification.note)}` : ''}</p>`}${plan.result ? `<details class="execution-result"><summary>执行结果</summary><pre>${esc(typeof plan.result === 'object' ? JSON.stringify(plan.result, null, 2) : plan.result)}</pre></details>` : ''}${plan.executed_by ? `<p class="reference-meta">执行人：${esc(plan.executed_by)}</p>` : ''}${plan.status === 'pending' && can('remediation:execute') ? `<button class="button small" data-execute-plan="${esc(plan.id)}">${icon('play')}审阅并执行</button>` : ''}</div>`;
+}
+function remediationHtml(incident) {
+  const data = state.remediation;
+  const manual = state.user?.role === 'junior' ? '当前账号为初级工程师，请按诊断方案人工处置并记录结果。' : !can('remediation:execute') ? '当前账号仅可查看处置方案，无辅助执行权限。' : '';
+  return `<div class="detail-section"><div class="section-heading"><h3>${icon('shield-check')}AI 辅助处置</h3><span class="muted">${can('remediation:execute') ? '确认后执行' : '人工处置'}</span></div>${manual ? `<p class="permission-note">${esc(manual)}</p>` : ''}${!data ? '<p class="muted">正在读取可用剧本</p>' : data.error ? `<p class="permission-note">${esc(data.error)}</p>` : `<p class="step-description">${esc(data.reason || (data.eligible ? '满足辅助处置条件' : '当前事件不满足辅助处置条件'))}</p>${(data.playbooks || []).map((playbook) => `<div class="playbook-row"><div><strong>${esc(playbook.name)}</strong><p>${esc(playbook.description)}</p><span class="reference-meta">${esc(executionMode(playbook.mode))} · ${esc({ low: '低风险', read_only: '只读' }[playbook.risk] || playbook.risk || '风险待审核')}</span></div>${can('remediation:execute') ? `<button class="button small" data-create-plan="${esc(playbook.id)}" ${!data.eligible ? 'disabled' : ''}>${icon('list-checks')}生成计划</button>` : ''}</div>`).join('')}${!(data.playbooks || []).length ? '<p class="muted">没有匹配的已审核白名单剧本</p>' : ''}`}</div>${(data?.plans || []).length ? `<div class="detail-section"><div class="section-heading"><h3>${icon('history')}处置记录</h3><span class="muted">${data.plans.length} 条</span></div>${data.plans.map(planHtml).join('')}</div>` : ''}${feedbackHtml(incident)}`;
+}
+function feedbackHtml(incident) {
+  const learning = state.learning;
+  const feedback = learning?.current_feedback;
+  const enabled = can('incident:write') && Boolean(diagnosis(incident)) && !incident.is_demo;
+  return `<div class="detail-section"><div class="section-heading"><h3>${icon('message-square-heart')}诊断建议反馈</h3>${feedback ? '<span class="muted">已反馈</span>' : ''}</div>${incident.is_demo ? '<p class="permission-note">演示事件不计入真实反馈指标或历史案例。</p>' : learning?.error ? `<p class="permission-note">${esc(learning.error)}</p>` : `<form id="feedback-form"><div class="feedback-options"><label class="${feedback?.useful === true ? 'selected' : ''}"><input type="radio" name="useful" value="true" ${feedback?.useful === true ? 'checked' : ''} ${!enabled ? 'disabled' : ''} required />${icon('thumbs-up')}建议有用</label><label class="${feedback?.useful === false ? 'selected' : ''}"><input type="radio" name="useful" value="false" ${feedback?.useful === false ? 'checked' : ''} ${!enabled ? 'disabled' : ''} required />${icon('thumbs-down')}建议无用</label></div><label class="sr-only" for="feedback-comment">反馈说明</label><textarea id="feedback-comment" maxlength="2000" placeholder="实际结果、建议问题或修正意见（可选）" ${!enabled ? 'disabled' : ''}>${esc(feedback?.comment || '')}</textarea><div class="followup-footer"><button class="button small" type="submit" ${!enabled ? 'disabled' : ''}>${icon('send')}${feedback ? '更新反馈' : '提交反馈'}</button></div><p id="feedback-error" class="form-error" role="alert"></p></form>`}${learning?.case ? `<div class="case-record">${icon('book-check')}已沉淀历史案例 <span>${esc(learning.case.id)}</span></div>` : ''}</div>`;
+}
 function renderDetail(incident, force = false) {
   if (!incident) return;
-  const signature = JSON.stringify(incident) + state.tab;
+  const signature = JSON.stringify([incident, state.remediation, state.learning, state.user?.role, state.user?.permissions]) + state.tab;
   if (signature === state.detailSignature && !force) return;
   const draft = document.getElementById('followup-message')?.value || '';
-  if ((document.activeElement?.id === 'followup-message' || state.busy) && !force) return;
+  if (['followup-message', 'feedback-comment'].includes(document.activeElement?.id) && !force || state.busy && !force) return;
   state.detailSignature = signature;
   const data = diagnosis(incident);
   $('incident-detail').innerHTML = `<div class="detail-heading"><div class="detail-id"><span>INC-${esc(shortId(incident.id))}${incident.is_demo ? ' · 演示事件' : ''}</span><button class="icon-button" data-action="refresh-detail" title="刷新事件详情" aria-label="刷新事件详情">${icon('refresh-cw')}</button></div><h2>${esc(incidentTitle(incident))}</h2><div class="detail-meta">${severity(incident.severity)}${status(incident.status)}<span>首次发现 ${esc(time(incident.first_seen, true))}</span></div><div class="detail-tags"><span class="subtle-tag">${esc(incident.service || '未提供服务')}</span><span class="subtle-tag">${esc(incident.environment || '未提供环境')}</span><span class="subtle-tag">${esc(incident.instance || '未提供实例')}</span></div></div><div class="detail-tabs" role="tablist" aria-label="事件详情">${detailTab('diagnosis', '诊断结论')}${detailTab('context', '故障上下文')}${detailTab('trace', '工具轨迹')}</div><div class="detail-body" id="detail-panel" role="tabpanel">${state.tab === 'diagnosis' ? diagnosisHtml(incident) : state.tab === 'context' ? contextHtml(incident) : traceHtml(incident)}${incident.status !== 'resolved' ? `<form class="followup-form" id="followup-form"><label for="followup-message">补充信息 / 修正诊断</label><textarea id="followup-message" required maxlength="10000" placeholder="例如：故障只影响 node-01，今天没有发布变更">${esc(draft)}</textarea><div class="followup-footer"><button type="submit" class="button small">${icon('send')}补充并诊断</button></div><p id="followup-error" class="form-error" role="alert"></p></form>` : ''}</div><div class="detail-actions">${incident.status !== 'resolved' ? `<button class="button primary" data-action="acknowledge" ${!data || incident.status === 'acknowledged' ? 'disabled' : ''}>${icon('check')}${incident.status === 'acknowledged' ? '已确认方案' : '确认方案'}</button><button class="button" data-action="resolve" ${!data ? 'disabled' : ''}>${icon('check-check')}记录解决</button>` : ''}<button class="icon-button" data-action="rediagnose" title="重新采集并诊断" aria-label="重新采集并诊断" ${incident.status === 'diagnosing' ? 'disabled' : ''}>${icon('rotate-cw')}</button><button class="icon-button" data-action="verify" title="验证恢复状态" aria-label="验证恢复状态">${icon('shield-check')}</button><button class="icon-button export-action" data-action="export" title="导出故障复盘" aria-label="导出故障复盘">${icon('download')}</button></div>`;
@@ -215,12 +312,23 @@ function renderDetail(incident, force = false) {
   refreshButton.replaceWith(headingTools);
   headingTools.innerHTML = `<button class="icon-button" data-action="merge" title="合并事件" aria-label="合并事件" ${incident.status === 'diagnosing' ? 'disabled' : ''}>${icon('combine')}</button><button class="icon-button" data-action="split" title="拆分原始告警" aria-label="拆分原始告警" ${incident.status === 'diagnosing' || (incident.original_alerts || []).length < 2 ? 'disabled' : ''}>${icon('split')}</button>`;
   headingTools.append(refreshButton);
+  const tabs = $('incident-detail').querySelector('.detail-tabs');
+  tabs.insertAdjacentHTML('beforeend', detailTab('remediation', '处置与反馈'));
+  if (state.tab === 'remediation') $('detail-panel').innerHTML = remediationHtml(incident);
+  if (!can('incident:write')) {
+    $('followup-form')?.remove();
+    $('incident-detail').querySelectorAll('[data-action="acknowledge"], [data-action="resolve"], [data-action="rediagnose"], [data-action="verify"], [data-action="merge"], [data-action="split"]').forEach((button) => { button.disabled = true; button.title = '当前账号仅可查看'; });
+  }
+  if (can('remediation:execute') && state.tab !== 'remediation') {
+    $('incident-detail').querySelector('.detail-actions').insertAdjacentHTML('afterbegin', `<button class="button" data-action="remediation">${icon('shield-check')}辅助处置</button>`);
+  }
   icons();
 }
 async function selectIncident(id) {
   if (state.busy) return;
   if (state.selectedId !== id) {
     state.selected = null;
+    state.learning = null; state.remediation = null;
     $('incident-detail').innerHTML = '<div class="empty-state">正在读取事件详情…</div>';
   }
   state.selectedId = id;
@@ -232,10 +340,14 @@ async function selectIncident(id) {
 async function refreshDetail() {
   if (!state.selectedId) return;
   const id = state.selectedId;
-  const data = await api(`/api/incidents/${encodeURIComponent(id)}`);
+  const path = `/api/incidents/${encodeURIComponent(id)}`;
+  const results = await Promise.allSettled([api(path), api(`${path}/remediation`), api(`${path}/learning`)]);
   if (state.selectedId !== id) return;
-  state.selected = data;
-  renderDetail(data);
+  if (results[0].status === 'rejected') throw results[0].reason;
+  state.selected = results[0].value;
+  state.remediation = results[1].status === 'fulfilled' ? results[1].value : { error: results[1].reason.message };
+  state.learning = results[2].status === 'fulfilled' ? results[2].value : { error: results[2].reason.message };
+  renderDetail(state.selected);
 }
 
 function renderSources() {
@@ -248,10 +360,13 @@ function renderSources() {
     const current = error ? 'error' : running ? '' : 'offline';
     return `<tr><td><span class="source-name">${icon('file-text')}${esc(item.name)}${item.is_demo ? '<span class="subtle-tag">演示</span>' : ''}</span><code class="source-path">${esc(item.path)}</code></td><td><span class="source-service">${esc(item.service)}</span><div class="source-secondary">${esc(item.environment)} · ${esc(item.instance)}</div></td><td><span class="source-status ${current}"><span class="status-dot ${current}"></span>${error ? '采集异常' : running ? (item.last_polled_at ? '采集中' : '等待采集') : '已暂停'}</span>${error ? `<p class="source-error">${esc(error)}</p>` : `<div class="source-secondary">${esc(sourceNames[item.source] || item.source)} · ${esc(item.poll_interval_seconds || 5)} 秒</div>`}</td><td class="time-cell">${esc(time(item.last_polled_at))}<div class="source-secondary">游标 ${esc(item.cursor_offset ?? 0)} 字节</div></td><td><input class="switch" type="checkbox" data-source-toggle="${esc(item.id)}" ${running ? 'checked' : ''} title="${running ? '暂停监控' : '启用监控'}" aria-label="${running ? '暂停' : '启用'} ${esc(item.name)} 监控" /></td><td class="actions-cell"><button class="icon-button" data-source-scan="${esc(item.id)}" title="立即采集" aria-label="立即采集 ${esc(item.name)}">${icon('scan-line')}</button><button class="icon-button" data-source-delete="${esc(item.id)}" title="移除数据源" aria-label="移除 ${esc(item.name)}">${icon('trash-2')}</button></td></tr>`;
   }).join('') : '<tr><td colspan="6" class="table-empty">尚未接入日志数据源</td></tr>';
+  $('source-rows').querySelectorAll('[data-source-toggle], [data-source-delete]').forEach((control) => { control.disabled = !can('source:manage'); });
+  $('source-rows').querySelectorAll('[data-source-scan]').forEach((control) => { control.disabled = !can('source:scan'); });
   icons();
 }
-async function loadSources() { state.sources = items(await api('/api/sources')); renderSources(); }
+async function loadSources() { if (!can('incident:read')) return; state.sources = items(await api('/api/sources')); renderSources(); }
 async function loadKnowledge() {
+  if (!can('incident:read')) return;
   const query = $('knowledge-search').value.trim();
   const data = await api(query ? `/api/knowledge/search?q=${encodeURIComponent(query)}&limit=20` : '/api/knowledge');
   const documents = items(data);
@@ -261,20 +376,55 @@ async function loadKnowledge() {
   icons();
 }
 async function loadAudit() {
+  if (!can('incident:read')) return;
   const rows = items(await api('/api/audit?limit=200'));
   $('audit-rows').innerHTML = rows.length ? rows.map((item) => `<tr><td>${esc(time(item.created_at, true))}</td><td>${esc(item.actor || '智能体')}</td><td>${esc(toolNames[item.action] || item.action)}</td><td>${esc(item.target || '—')}</td><td><span class="audit-result">${esc(typeof item.result === 'object' ? JSON.stringify(item.result) : item.result || '')}</span>${item.details ? `<details><summary>详情</summary><div class="audit-result">${esc(typeof item.details === 'object' ? JSON.stringify(item.details, null, 2) : item.details)}</div></details>` : ''}</td></tr>`).join('') : '<tr><td colspan="5" class="table-empty">暂无审计记录</td></tr>';
 }
-async function switchView(view) {
+async function loadCampaigns() {
+  if (!can('incident:read')) return;
+  const data = await api('/api/campaigns');
+  const groups = items(data);
+  $('nav-campaign-count').textContent = groups.length;
+  $('campaign-summary').textContent = `${groups.length} 组关联候选 · ${Math.round((data.window_seconds || 600) / 60)} 分钟关联窗口`;
+  $('campaign-list').innerHTML = `${data.boundary ? `<p class="permission-note campaign-boundary">${esc(data.boundary)}</p>` : ''}${groups.length ? groups.map((group) => `<article class="campaign-row"><div class="campaign-heading"><span class="campaign-id">GRP-${esc(shortId(group.id))}</span>${severity(group.severity)}${group.is_demo ? '<span class="demo-label">演示</span>' : ''}<span class="muted">${esc(group.environment || '未标记环境')}</span></div><h2>${esc(group.summary || '疑似同源故障')}</h2><p class="step-description">${esc(group.root_cause || '关联线索待人工核实，尚未确认统一根因')}</p><div class="campaign-scope"><span>服务：${esc((group.services || []).join('、') || '未知')}</span><span>实例：${esc((group.instances || []).join('、') || '未知')}</span></div><div class="campaign-evidence">${(group.evidence || []).map((evidence) => `<p>${icon('link')}${esc(typeof evidence === 'string' ? evidence : evidence.detail || evidence.relation)}</p>`).join('')}</div><div class="campaign-incidents">${(group.incident_ids || []).map((id) => `<button class="button small" data-campaign-incident="${esc(id)}">${icon('arrow-up-right')}INC-${esc(shortId(id))}</button>`).join('')}</div><p class="reference-meta">${esc(time(group.first_seen, true))} 至 ${esc(time(group.last_seen, true))}</p></article>`).join('') : '<div class="empty-state">尚无满足关联条件的故障组</div>'}`;
+  icons();
+}
+function rate(value) { return value == null ? '—' : `${Math.round(value * 100)}%`; }
+async function loadLearning() {
+  if (!can('incident:read')) return;
+  const data = await api('/api/learning/metrics');
+  const rows = data.runbooks || [];
+  $('learning-count').textContent = data.feedback_count ?? 0;
+  $('learning-useful').textContent = data.useful_count ?? 0;
+  $('learning-rate').textContent = rate(data.acceptance_rate);
+  $('learning-review').textContent = rows.filter((item) => item.review_required).length;
+  $('learning-rows').innerHTML = rows.length ? rows.map((row) => `<tr><td><strong>${esc(row.title || row.id)}</strong><small>${esc(row.title ? row.id : '')}</small></td><td>${esc(row.feedback_count ?? row.total ?? 0)}</td><td>${esc(row.useful_count ?? row.useful ?? 0)}</td><td>${rate(row.acceptance_rate ?? row.rate)}</td><td><span class="quality-status ${row.review_required ? 'review' : ''}">${row.review_required ? '建议人工复核' : (row.feedback_count || row.total) ? '持续观察' : '暂无反馈'}</span></td></tr>`).join('') : '<tr><td colspan="5" class="table-empty">尚无真实事件反馈</td></tr>';
+}
+async function loadAccounts() {
+  if (!can('account:manage')) return;
+  state.accounts = items(await api('/api/accounts'));
+  $('accounts-summary').textContent = `${state.accounts.length} 个账号 · ${state.accounts.filter((item) => item.enabled).length} 个启用`;
+  $('accounts-rows').innerHTML = state.accounts.map((account) => `<tr><td><strong>${esc(account.username)}</strong>${account.username === state.user?.username ? '<span class="subtle-tag">当前账号</span>' : ''}</td><td><label class="sr-only" for="account-role-${esc(account.id)}">${esc(account.username)} 的级别</label><select id="account-role-${esc(account.id)}" data-account-role="${esc(account.id)}">${Object.entries(roleNames).filter(([key]) => ['viewer', 'junior', 'senior', 'admin'].includes(key)).map(([key, name]) => `<option value="${esc(key)}" ${account.role === key ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select><button class="icon-button" data-save-account="${esc(account.id)}" title="保存账号级别" aria-label="保存 ${esc(account.username)} 的级别">${icon('save')}</button></td><td><label class="account-enabled"><input type="checkbox" class="switch" data-account-enabled="${esc(account.id)}" ${account.enabled ? 'checked' : ''} aria-label="启用 ${esc(account.username)}" /><span>${account.enabled ? '已启用' : '已停用'}</span></label></td><td class="time-cell">${esc(time(account.created_at, true))}</td><td><span class="reference-meta">${esc(roleNames[account.role] || account.role)}</span></td></tr>`).join('') || '<tr><td colspan="5" class="table-empty">暂无账号</td></tr>';
+  icons();
+}
+function showView(view) {
   state.view = view;
   document.querySelectorAll('.view').forEach((element) => element.classList.toggle('hidden', element.id !== `view-${view}`));
   document.querySelectorAll('[data-view]').forEach((element) => { element.classList.toggle('active', element.dataset.view === view); element.setAttribute('aria-current', element.dataset.view === view ? 'page' : 'false'); });
-  $('view-name').textContent = { incidents: '故障事件', sources: '数据源', knowledge: '知识库', audit: '审计记录' }[view];
+  $('view-name').textContent = { incidents: '故障事件', sources: '数据源', knowledge: '知识库', audit: '审计记录', campaigns: '关联故障', learning: '知识质量', accounts: '账号管理' }[view];
   globalError();
+}
+async function switchView(view) {
+  if (view === 'accounts' ? !need('account:manage') : !need('incident:read')) return;
+  showView(view);
   try {
     if (view === 'incidents') { await overview(); await loadIncidents(); }
     else if (view === 'sources') await loadSources();
     else if (view === 'knowledge') await loadKnowledge();
     else if (view === 'audit') await loadAudit();
+    else if (view === 'campaigns') await loadCampaigns();
+    else if (view === 'learning') await loadLearning();
+    else if (view === 'accounts') await loadAccounts();
   } catch (error) { globalError(`数据加载失败：${error.message}`); }
 }
 async function refresh() {
@@ -282,10 +432,15 @@ async function refresh() {
   state.loading = true;
   try {
     await health();
+    await loadIdentity();
+    if (!can('incident:read')) { globalError(); return; }
     await overview();
     if (state.view === 'incidents') await loadIncidents();
     if (state.view === 'sources') await loadSources();
     if (state.view === 'audit') await loadAudit();
+    if (state.view === 'campaigns') await loadCampaigns();
+    if (state.view === 'learning') await loadLearning();
+    if (state.view === 'accounts' && !document.activeElement?.closest('.accounts-table')) await loadAccounts();
     globalError();
   } catch (error) { globalError(`同步失败：${error.message}`); }
   finally { state.loading = false; }
@@ -299,8 +454,73 @@ async function exportIncident(id) {
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+async function updateAccount(id, body, control) {
+  if (!need('account:manage')) return;
+  control.disabled = true;
+  try { await api(`/api/accounts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }); toast('账号权限已更新'); await loadIdentity(); if (can('account:manage')) await loadAccounts(); }
+  catch (error) { toast(error.message, true); if (can('account:manage')) { try { await loadAccounts(); } catch {} } }
+  finally { if (control.isConnected) control.disabled = !can('account:manage'); }
+}
+async function createRemediationPlan(playbookId, button) {
+  if (!need('remediation:execute') || !state.selectedId || state.busy) return;
+  state.busy = true; button.disabled = true;
+  try { await api(`/api/incidents/${encodeURIComponent(state.selectedId)}/remediation/plans`, { method: 'POST', body: JSON.stringify({ playbook_id: playbookId }) }); toast('处置计划已生成，请核对目标和风险'); }
+  catch (error) { toast(error.message, true); }
+  finally { state.busy = false; if (button.isConnected) button.disabled = !can('remediation:execute'); }
+  try { await refreshDetail(); } catch (error) { toast(error.message, true); }
+}
+function openExecution(id) {
+  if (!need('remediation:execute')) return;
+  const plan = (state.remediation?.plans || []).find((item) => item.id === id);
+  if (!plan || plan.status !== 'pending') { toast('该计划已不可执行，请刷新处置记录。', true); return; }
+  if (plan.expires_at && new Date(plan.expires_at).getTime() <= Date.now()) { toast('该计划已过期，请重新生成。', true); return; }
+  state.executionPlan = plan;
+  $('execute-plan-id').textContent = `PLAN-${shortId(plan.id)} · INC-${shortId(plan.incident_id)}`;
+  $('execute-review').innerHTML = `<h3>${esc(plan.name || plan.playbook_id)}</h3>${targetHtml(plan.target)}<dl class="target-grid"><dt>故障类型</dt><dd>${esc(plan.failure_type)}</dd><dt>告警等级</dt><dd>${esc(severityNames[plan.severity] || plan.severity)}</dd><dt>执行方式</dt><dd>${esc(executionMode(plan.mode))}</dd><dt>动作风险</dt><dd>${esc({ low: '低风险 · 已审核白名单', read_only: '只读' }[plan.risk] || plan.risk || '由服务端审核')}</dd><dt>剧本审核人</dt><dd>${esc(plan.approved_by || '未提供')}</dd><dt>执行确认人</dt><dd>${esc(state.user?.username)}</dd><dt>有效期</dt><dd>${esc(time(plan.expires_at, true))}</dd></dl>${plan.action ? `<div class="review-action"><strong>执行动作</strong><p>${esc(typeof plan.action === 'object' ? JSON.stringify(plan.action, null, 2) : plan.action)}</p></div>` : ''}<div class="review-action"><strong>回滚 / 后续处理</strong><p>${esc(typeof plan.rollback === 'object' ? JSON.stringify(plan.rollback, null, 2) : plan.rollback || '如验证失败，继续人工排查并升级处理。')}</p></div>${plan.mode === 'demo' ? '<p class="permission-note">本次为模拟执行，执行结果不会证明真实服务已恢复。</p>' : '<p class="uncertainty">本次将调用真实环境执行器。请确认目标与当前故障一致。</p>'}`;
+  $('execute-confirm').checked = false; $('execute-submit').disabled = true; $('execute-error').textContent = '';
+  $('execute-dialog').showModal(); icons();
+}
+$('execute-confirm').addEventListener('change', () => { $('execute-submit').disabled = !$('execute-confirm').checked || !can('remediation:execute'); });
+$('execute-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!need('remediation:execute') || !state.executionPlan || !$('execute-confirm').checked || state.busy) return;
+  const plan = state.executionPlan;
+  state.busy = true; $('execute-submit').disabled = true; $('execute-error').textContent = '';
+  try {
+    const response = await api(`/api/remediation/plans/${encodeURIComponent(plan.id)}/execute`, { method: 'POST', body: JSON.stringify({ confirmed: true }) });
+    const result = response.plan || response;
+    $('execute-dialog').close(); state.executionPlan = null;
+    toast(planStatusNames[result.status] || '执行状态已更新', ['failed', 'verification_failed', 'unknown', 'stale'].includes(result.status));
+  } catch (error) { $('execute-error').textContent = error.message; }
+  finally { state.busy = false; $('execute-submit').disabled = !$('execute-confirm').checked || !can('remediation:execute'); }
+  try { await refreshDetail(); await overview(); } catch (error) { toast(error.message, true); }
+});
+document.addEventListener('submit', async (event) => {
+  if (event.target.id !== 'feedback-form') return;
+  event.preventDefault();
+  if (!need('incident:write') || !state.selectedId || state.busy) return;
+  const fields = new FormData(event.target);
+  if (!fields.has('useful')) return;
+  const button = event.target.querySelector('[type="submit"]'); button.disabled = true; state.busy = true;
+  $('feedback-error').textContent = '';
+  try { state.learning = await api(`/api/incidents/${encodeURIComponent(state.selectedId)}/feedback`, { method: 'POST', body: JSON.stringify({ useful: fields.get('useful') === 'true', comment: $('feedback-comment').value.trim() || null }) }); toast('反馈已保存'); }
+  catch (error) { if ($('feedback-error')) $('feedback-error').textContent = error.message; }
+  finally { state.busy = false; if (button.isConnected) button.disabled = !can('incident:write'); }
+  renderDetail(state.selected, true);
+});
+$('create-account').addEventListener('click', () => { if (!need('account:manage')) return; $('account-form').reset(); $('account-error').textContent = ''; $('account-dialog').showModal(); });
+$('account-form').addEventListener('submit', async (event) => {
+  event.preventDefault(); if (!need('account:manage')) return;
+  const button = event.target.querySelector('[type="submit"]'); button.disabled = true;
+  $('account-error').textContent = '';
+  try { const fields = new FormData(event.target); await api('/api/accounts', { method: 'POST', body: JSON.stringify({ username: String(fields.get('username')).trim(), password: fields.get('password'), role: fields.get('role') }) }); $('account-form').reset(); $('account-dialog').close(); toast('运维账号已创建'); await loadAccounts(); }
+  catch (error) { $('account-error').textContent = error.message; }
+  finally { button.disabled = false; }
+});
 async function incidentAction(action, button) {
   if (!state.selectedId || state.busy) return;
+  if (action === 'remediation') { state.tab = 'remediation'; renderDetail(state.selected, true); return; }
+  if (!need(['export', 'refresh-detail'].includes(action) ? 'incident:read' : 'incident:write')) return;
   if (action === 'merge' || action === 'split') { await openGrouping(action); return; }
   if (action === 'resolve') {
     $('resolve-incident-label').textContent = `INC-${shortId(state.selectedId)} · ${state.selected?.service || ''}`;
@@ -313,7 +533,7 @@ async function incidentAction(action, button) {
   button.disabled = true;
   try {
     const path = `/api/incidents/${encodeURIComponent(state.selectedId)}`;
-    if (action === 'acknowledge') { await api(path, { method: 'PATCH', body: JSON.stringify({ status: 'acknowledged', operator: 'local-operator' }) }); toast('方案已确认，人工执行后记录处置结果。'); }
+    if (action === 'acknowledge') { await api(path, { method: 'PATCH', body: JSON.stringify({ status: 'acknowledged', operator: state.user?.username }) }); toast('方案已确认，人工执行后记录处置结果。'); }
     if (action === 'rediagnose') { await api(`${path}/followup`, { method: 'POST', body: JSON.stringify({ message: '重新诊断', logs: null }) }); toast('已提交重新诊断'); }
     if (action === 'verify') { const data = await api(`${path}/verify`, { method: 'POST', body: '{}' }); toast(data.note || (data.healthy === true ? '新采集日志未发现异常，请结合服务指标确认恢复。' : data.healthy === false ? '仍然发现异常日志，需要继续排查。' : '恢复状态仍需人工验证。')); }
     if (action === 'export') await exportIncident(state.selectedId);
@@ -322,6 +542,7 @@ async function incidentAction(action, button) {
   try { await refreshDetail(); await loadIncidents(); await overview(); } catch (error) { toast(error.message, true); }
 }
 async function openGrouping(mode) {
+  if (!need('incident:write')) return;
   try {
     await refreshDetail();
     const incident = state.selected;
@@ -350,6 +571,7 @@ function updateGroupingSelection() {
 document.querySelector('#group-options').addEventListener('change', updateGroupingSelection);
 $('group-form').addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (!need('incident:write')) return;
   const ids = [...document.querySelectorAll('#group-options input:checked')].map((element) => element.value);
   const grouping = state.grouping;
   if (!grouping || !ids.length) { $('group-error').textContent = '请至少选择一项'; return; }
@@ -372,6 +594,7 @@ $('group-form').addEventListener('submit', async (event) => {
 });
 
 document.addEventListener('click', async (event) => {
+  if (event.target.closest('button:disabled')) return;
   const nav = event.target.closest('[data-view]');
   if (nav) { await switchView(nav.dataset.view); return; }
   const close = event.target.closest('[data-close]');
@@ -382,6 +605,14 @@ document.addEventListener('click', async (event) => {
   if (tab) { state.tab = tab.dataset.detailTab; renderDetail(state.selected, true); return; }
   const action = event.target.closest('[data-action]');
   if (action) { await incidentAction(action.dataset.action, action); return; }
+  const campaignIncident = event.target.closest('[data-campaign-incident]');
+  if (campaignIncident) { try { await switchView('incidents'); await selectIncident(campaignIncident.dataset.campaignIncident); } catch (error) { toast(error.message, true); } return; }
+  const createPlan = event.target.closest('[data-create-plan]');
+  if (createPlan) { await createRemediationPlan(createPlan.dataset.createPlan, createPlan); return; }
+  const executePlan = event.target.closest('[data-execute-plan]');
+  if (executePlan) { openExecution(executePlan.dataset.executePlan); return; }
+  const saveAccount = event.target.closest('[data-save-account]');
+  if (saveAccount) { const select = $(`account-role-${saveAccount.dataset.saveAccount}`); await updateAccount(saveAccount.dataset.saveAccount, { role: select.value }, saveAccount); return; }
   const copy = event.target.closest('[data-copy]');
   if (copy) { try { await navigator.clipboard.writeText(copy.dataset.copy); toast('命令已复制'); } catch { toast('浏览器未允许复制命令。', true); } return; }
   const reference = event.target.closest('[data-incident-reference]');
@@ -392,9 +623,10 @@ document.addEventListener('click', async (event) => {
     return;
   }
   const scan = event.target.closest('[data-source-scan]');
-  if (scan) { scan.disabled = true; try { const result = await api(`/api/sources/${encodeURIComponent(scan.dataset.sourceScan)}/scan-now`, { method: 'POST', body: '{}' }); toast(`采集完成：${result.lines_read ?? 0} 行日志，${result.anomalies_detected ?? 0} 个异常`); await loadSources(); await overview(); } catch (error) { toast(error.message, true); } finally { if (scan.isConnected) scan.disabled = false; } return; }
+  if (scan) { if (!need('source:scan')) return; scan.disabled = true; try { const result = await api(`/api/sources/${encodeURIComponent(scan.dataset.sourceScan)}/scan-now`, { method: 'POST', body: '{}' }); toast(`采集完成：${result.lines_read ?? 0} 行日志，${result.anomalies_detected ?? 0} 个异常`); await loadSources(); await overview(); } catch (error) { toast(error.message, true); } finally { if (scan.isConnected) scan.disabled = !can('source:scan'); } return; }
   const remove = event.target.closest('[data-source-delete]');
   if (remove) {
+    if (!need('source:manage')) return;
     const source = state.sources.find((item) => item.id === remove.dataset.sourceDelete);
     if (!window.confirm(`移除数据源“${source?.name || ''}”？已有事件和日志文件将保留。`)) return;
     try { await api(`/api/sources/${encodeURIComponent(remove.dataset.sourceDelete)}`, { method: 'DELETE' }); toast('数据源已移除'); await loadSources(); await overview(); } catch (error) { toast(error.message, true); }
@@ -405,16 +637,20 @@ document.addEventListener('keydown', async (event) => {
   if (row && ['Enter', ' '].includes(event.key)) { event.preventDefault(); try { await selectIncident(row.dataset.incident); } catch (error) { toast(error.message, true); } }
 });
 document.addEventListener('change', async (event) => {
+  const accountEnabled = event.target.closest('[data-account-enabled]');
+  if (accountEnabled) { const enabled = accountEnabled.checked; if (!enabled && !window.confirm('停用此账号后，该账号将无法访问工作区。确定停用？')) { accountEnabled.checked = true; return; } await updateAccount(accountEnabled.dataset.accountEnabled, { enabled }, accountEnabled); return; }
   const toggle = event.target.closest('[data-source-toggle]');
   if (!toggle) return;
+  if (!need('source:manage')) return;
   const enabled = toggle.checked;
   toggle.disabled = true;
   try { await api(`/api/sources/${encodeURIComponent(toggle.dataset.sourceToggle)}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }); toast(enabled ? '已启用监控' : '已暂停监控'); await loadSources(); await overview(); }
   catch (error) { toggle.checked = !enabled; toast(error.message, true); }
-  finally { if (toggle.isConnected) toggle.disabled = false; }
+  finally { if (toggle.isConnected) toggle.disabled = !can('source:manage'); }
 });
 $('source-form').addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (!need('source:manage')) return;
   const fields = new FormData(event.currentTarget);
   const body = Object.fromEntries(fields.entries());
   body.enabled = fields.has('enabled');
@@ -430,6 +666,7 @@ $('source-form').addEventListener('submit', async (event) => {
 document.addEventListener('submit', async (event) => {
   if (event.target.id !== 'followup-form') return;
   event.preventDefault();
+  if (!need('incident:write')) return;
   const message = $('followup-message').value.trim();
   if (!message) return;
   const button = event.target.querySelector('[type="submit"]');
@@ -443,21 +680,23 @@ document.addEventListener('submit', async (event) => {
 });
 $('resolve-form').addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (!need('incident:write')) return;
   const resolution = $('resolution').value.trim();
   if (!resolution) { $('resolve-error').textContent = '请记录实际处置结果'; return; }
   const button = event.currentTarget.querySelector('[type="submit"]');
   button.disabled = true;
   $('resolve-error').textContent = '';
-  try { await api(`/api/incidents/${encodeURIComponent(state.selectedId)}`, { method: 'PATCH', body: JSON.stringify({ status: 'resolved', resolution, operator: 'local-operator' }) }); $('resolve-dialog').close(); toast('解决结果已保存，复盘已更新'); await refreshDetail(); await loadIncidents(); await overview(); }
+  try { await api(`/api/incidents/${encodeURIComponent(state.selectedId)}`, { method: 'PATCH', body: JSON.stringify({ status: 'resolved', resolution, operator: state.user?.username }) }); $('resolve-dialog').close(); toast('解决结果已保存，复盘已更新'); await refreshDetail(); await loadIncidents(); await overview(); }
   catch (error) { $('resolve-error').textContent = error.message; }
   finally { button.disabled = false; }
 });
 $('inject-demo').addEventListener('click', async () => {
+  if (!need('incident:write')) return;
   $('inject-demo').disabled = true;
   $('demo-feedback').textContent = '';
   try { const data = await api('/api/demo/events', { method: 'POST', body: JSON.stringify({ scenario: $('demo-scenario').value }) }); $('demo-feedback').textContent = data.message || '异常已写入演示日志，等待自动采集'; toast('演示异常已注入，自动监控正在检测'); await refresh(); }
   catch (error) { $('demo-feedback').textContent = `注入失败：${error.message}`; toast(error.message, true); }
-  finally { $('inject-demo').disabled = false; }
+  finally { $('inject-demo').disabled = !can('incident:write'); }
 });
 $('manual-example').addEventListener('change', async () => {
   const selected = $('manual-example').selectedOptions[0];
@@ -467,6 +706,7 @@ $('manual-example').addEventListener('change', async () => {
 });
 $('manual-form').addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (!need('incident:write')) return;
   const logs = $('manual-logs').value.trim();
   if (!logs) { $('manual-error').textContent = '请输入日志内容'; return; }
   $('manual-diagnose').disabled = true;
@@ -478,10 +718,26 @@ $('manual-form').addEventListener('submit', async (event) => {
 });
 $('auth-form').addEventListener('submit', async (event) => {
   event.preventDefault();
-  try { storeToken($('access-token').value.trim()); $('auth-dialog').close(); toast('访问凭据已保存'); await refresh(); }
+  const button = $('auth-submit'); button.disabled = true;
+  $('auth-error').textContent = ''; state.busy = true;
+  try {
+    const data = await api(state.bootstrap ? '/api/auth/bootstrap' : '/api/auth/login', { method: 'POST', body: JSON.stringify({ username: $('auth-username').value.trim(), password: $('auth-password').value }) });
+    storeToken(data.token); state.epoch++; state.user = null; clearPrivateData(); $('auth-form').reset();
+    await loadIdentity(); $('auth-dialog').close(); toast('账号已登录'); state.busy = false; await switchView('incidents');
+  }
+  catch (error) { $('auth-error').textContent = error.message; }
+  finally { button.disabled = false; state.busy = false; }
+});
+$('token-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  try { storeToken($('access-token').value.trim()); state.epoch++; state.user = null; clearPrivateData(); await loadIdentity(); if (!state.user.authenticated) throw new Error('访问令牌未关联可用账号。'); $('access-token').value = ''; $('auth-dialog').close(); toast('访问令牌已生效'); await switchView('incidents'); }
   catch (error) { $('auth-error').textContent = error.message; }
 });
-$('clear-token').addEventListener('click', async () => { try { storeToken(''); $('access-token').value = ''; $('auth-dialog').close(); toast('访问凭据已清除'); await refresh(); } catch (error) { $('auth-error').textContent = error.message; } });
+$('logout').addEventListener('click', async () => {
+  try { await api('/api/auth/logout', { method: 'POST', body: '{}' }); }
+  catch (error) { toast(error.message, true); }
+  finally { try { storeToken(''); } catch {} state.epoch++; state.user = null; clearPrivateData(); showView('incidents'); updateIdentity(); $('auth-form').reset(); $('access-token').value = ''; globalError(); }
+});
 $('knowledge-file').addEventListener('change', async () => {
   const file = $('knowledge-file').files[0];
   if (!file) return;
@@ -490,6 +746,7 @@ $('knowledge-file').addEventListener('change', async () => {
 });
 $('import-form').addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (!need('knowledge:import')) return;
   const button = event.currentTarget.querySelector('[type="submit"]');
   button.disabled = true;
   $('import-error').textContent = '';
@@ -505,17 +762,23 @@ $('import-form').addEventListener('submit', async (event) => {
 
 $('add-source').addEventListener('click', sourceForm);
 $('add-source-from-incidents').addEventListener('click', sourceForm);
-$('open-manual').addEventListener('click', () => $('manual-dialog').showModal());
-$('open-auth').addEventListener('click', () => { $('access-token').value = readToken(); $('auth-error').textContent = ''; $('auth-dialog').showModal(); });
-$('import-knowledge').addEventListener('click', () => { $('import-error').textContent = ''; $('import-dialog').showModal(); });
+$('open-manual').addEventListener('click', () => { if (need('incident:write')) $('manual-dialog').showModal(); });
+$('open-auth').addEventListener('click', openAuth);
+$('session-login').addEventListener('click', openAuth);
+$('import-knowledge').addEventListener('click', () => { if (!need('knowledge:import')) return; $('import-error').textContent = ''; $('import-dialog').showModal(); });
 $('refresh-all').addEventListener('click', async () => { await refresh(); if (state.view === 'knowledge') { try { await loadKnowledge(); } catch (error) { globalError(error.message); } } });
 $('refresh-knowledge').addEventListener('click', async () => { try { await loadKnowledge(); } catch (error) { globalError(error.message); } });
 $('search-knowledge').addEventListener('click', async () => { try { await loadKnowledge(); } catch (error) { globalError(error.message); } });
 $('knowledge-search').addEventListener('keydown', async (event) => { if (event.key === 'Enter') { try { await loadKnowledge(); } catch (error) { globalError(error.message); } } });
 $('refresh-audit').addEventListener('click', async () => { try { await loadAudit(); } catch (error) { globalError(error.message); } });
+[['refresh-campaigns', loadCampaigns], ['refresh-learning', loadLearning]].forEach(([id, loader]) => $(id).addEventListener('click', async () => { if (!need('incident:read')) return; try { await loader(); } catch (error) { globalError(error.message); } }));
 $('incident-search').addEventListener('input', renderIncidentRows);
 ['environment-filter', 'severity-filter', 'status-filter'].forEach((id) => $(id).addEventListener('change', renderIncidentRows));
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+$('demo-scenario').insertAdjacentHTML('beforeend', '<option value="warning">低等级缓存告警 · 辅助处置</option>');
+[$('auth-username'), $('account-form').elements.username].forEach((input) => { input.maxLength = 64; input.minLength = 3; input.pattern = '[A-Za-z0-9][A-Za-z0-9_.-]{2,63}'; });
+clearPrivateData();
+updateIdentity();
 icons();
 refresh();
 setInterval(refresh, 5000);

@@ -1,0 +1,21 @@
+[
+  {
+    "id": "reviewed-cache-cleanup",
+    "name": "清理已托管的临时缓存",
+    "description": "由独立执行器按预定义保留策略处理固定服务的可重建临时缓存。",
+    "action": "cleanup_managed_temp",
+    "source": "server",
+    "service": "orders-api",
+    "environment": "staging",
+    "instance": "worker-01",
+    "failure_types": ["managed_cache_pressure"],
+    "risk": "low",
+    "approved_by": "service-owner-review-required",
+    "rollback": "执行器必须支持重新构建缓存；变更上线前由服务负责人验证回滚步骤。",
+    "endpoint_url": "https://executor.example.com/api/cache/cleanup",
+    "verify_url": "https://executor.example.com/api/cache/health",
+    "token_env": "CACHE_EXECUTOR_TOKEN",
+    "parameters": {"policy": "rebuildable-cache-only", "max_age_hours": 24},
+    "timeout_seconds": 10
+  }
+]

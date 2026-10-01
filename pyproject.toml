@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sre-react-rag-agent"
-version = "0.2.0"
+version = "0.3.0"
 description = "Auditable ReAct + RAG log diagnosis service for SRE operations"
 requires-python = ">=3.10"
 dependencies = [

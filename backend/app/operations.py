@@ -69,6 +69,7 @@ class OperationsService:
         self._running = False
         self._scan_locks: dict[str, asyncio.Lock] = {}
         self._last_scan: dict[str, float] = {}
+        self.resolution_handler = None
         # A killed process can leave a claimed job in diagnosing state.
         with self._lock, self._db:
             for row in self._db.execute("SELECT body FROM incidents WHERE status = 'diagnosing'").fetchall():
@@ -514,6 +515,12 @@ class OperationsService:
             self._save_incident(event)
             self._timeline(event_id, "status_changed", request.resolution or request.status, {"status": request.status}, actor=request.operator)
             self._audit("incident_status_changed", event_id, details=request.model_dump(), actor=request.operator, is_demo=event["is_demo"])
+        if request.status == "resolved" and self.resolution_handler:
+            try:
+                self.resolution_handler(self.get_incident(event_id), request.operator)
+            except Exception:
+                self.audit("historical_case_failed", "incident", event_id, request.operator,
+                           {"message": "事件已解决，但历史案例未能持久化，请检查知识库存储后重新记录解决结果。"})
         return self.get_incident(event_id)
 
     def followup(self, event_id: str, request: FollowupInput) -> dict:
@@ -550,6 +557,9 @@ class OperationsService:
             except KeyError:
                 result["note"] = "采集数据源已删除，无法验证恢复。"
         with self._lock, self._db:
+            current = self._get("incidents", event_id)
+            current["last_verification"] = result
+            self._save_incident(current)
             self._timeline(event_id, "recovery_verified", result["note"], result, actor=operator)
             self._audit("recovery_verified", event_id, result="unknown" if result["healthy"] is None else "ok", details=result, actor=operator, is_demo=event["is_demo"])
         return result

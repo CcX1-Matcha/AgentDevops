@@ -16,6 +16,8 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       CONTEXT_CONFIG_PATH: ${CONTEXT_CONFIG_PATH:-}
       OPS_SOURCES_PATH: ${OPS_SOURCES_PATH:-}
+      REMEDIATION_CONFIG_PATH: ${REMEDIATION_CONFIG_PATH:-}
+      CACHE_EXECUTOR_TOKEN: ${CACHE_EXECUTOR_TOKEN:-}
     volumes:
       - ops-data:/app/data
       - ./config:/app/config:ro

@@ -9,5 +9,6 @@ build/
 .env
 config/context.json
 config/sources.json
+config/remediation.json
 data/
 artifacts/

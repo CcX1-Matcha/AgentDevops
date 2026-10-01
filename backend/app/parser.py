@@ -39,6 +39,11 @@ _POSTGRES_DURATION = re.compile(r"\bduration:\s*(\d+(?:\.\d+)?)\s*ms\s+statement
 _RECOVERY = re.compile(r"\b(?:resolved|recovered|back to normal|not detected)\b|已恢复|已解除", re.I)
 _SQL_CONFIGURATION = re.compile(r"\bstatement_timeout\s*=|\b(?:query|statement) timeout (?:configured|set|enabled)\b", re.I)
 _EXTENDED_ALERT = re.compile(r"\b(?:CPUHigh|HighCPUUsage|CPUThrottlingHigh|ConsumerLagHigh|QueueBacklogHigh)\b", re.I)
+_MANAGED_CACHE_PRESSURE = re.compile(
+    r"\bmanaged temporary cache usage above baseline\b|"
+    r"托管(?:的)?可重建(?:临时)?缓存(?:使用量|占用量)?(?:超过基线|压力升高|压力过高|压力告警)",
+    re.I,
+)
 
 
 def _extended_failure(line: str) -> str | None:
@@ -99,6 +104,8 @@ def detect_source(line: str) -> str:
     if _TIMESTAMP.search(line) or any(word in low for word in ("kernel", "systemd", "oom", "segfault", "journal")):
         return "server"
     if _extended_failure(line):
+        return "server"
+    if _MANAGED_CACHE_PRESSURE.search(line):
         return "server"
     return "unknown"
 
@@ -175,6 +182,10 @@ def classify(line: str, source: str) -> tuple[str, str]:
         return "critical", "unknown_critical"
     if level in ("error", "err"):
         return "error", "unknown_error"
+    if _MANAGED_CACHE_PRESSURE.search(line):
+        if _RECOVERY.search(line):
+            return "info", "normal"
+        return "warning", "managed_cache_pressure"
     if level in ("warn", "warning", "notice"):
         return "warning", "degraded_service"
     return "info", "normal"

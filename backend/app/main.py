@@ -11,13 +11,16 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .agent import ReActAgent
+from .accounts import AccountService, create_account_router
 from .context import ContextCollector
 from .demo import DemoSources, create_demo_router
 from .knowledge_api import KnowledgeRepository, create_knowledge_router
+from .improvements import ImprovementService, create_improvement_router
 from .llm import LLMConfigurationError, LLMProtocolError, LLMTimeoutError
 from .models import DiagnoseRequest, DiagnoseResponse, KnowledgeListResponse
 from .operations import OperationsService, create_ops_router
 from .ops_models import SourcePatch
+from .remediation import RemediationService, create_remediation_router
 from .security import AccessMiddleware
 
 
@@ -28,6 +31,10 @@ agent = ReActAgent(store=repository.store)
 collector = ContextCollector()
 operations = OperationsService(_DATA / "operations.sqlite3", agent, context_provider=collector.collect)
 demo = DemoSources(operations, _DATA)
+accounts = AccountService(_DATA / "accounts.sqlite3", audit=operations.audit)
+improvements = ImprovementService(operations, repository)
+operations.resolution_handler = improvements.on_resolved
+remediation = RemediationService(operations, os.getenv("REMEDIATION_CONFIG_PATH"), demo_runner=demo.remediate)
 
 
 @asynccontextmanager
@@ -55,13 +62,17 @@ async def lifespan(application: FastAPI):
             agent._llm_agent = None
 
 
-app = FastAPI(title="SRE ReAct-RAG Operations Agent", version="0.2.0", lifespan=lifespan,
+app = FastAPI(title="SRE ReAct-RAG Operations Agent", version="0.3.0", lifespan=lifespan,
               description="Continuously detect, correlate and diagnose incidents from logs and alerts.")
-app.add_middleware(AccessMiddleware)
+app.add_middleware(AccessMiddleware, account_service=accounts)
+app.include_router(create_account_router(accounts))
 app.include_router(create_ops_router(operations))
 app.include_router(create_demo_router(demo))
 app.include_router(create_knowledge_router(repository, agent, operations))
+app.include_router(create_improvement_router(improvements))
+app.include_router(create_remediation_router(remediation))
 app.state.operations = operations
+app.state.accounts = accounts
 
 # The static UI is optional for API-only deployments.  Mounting from the
 # repository root keeps ``uvicorn app:app`` useful in both local and Docker
@@ -92,7 +103,8 @@ def health() -> dict:
             "service": "sre-diagnosis-agent", "knowledge_documents": len(agent.store.documents),
             "monitor_running": monitor["running"], "monitor": monitor, "context_connectors": len(collector.connectors),
             "context_configuration_error": collector.config_error,
-            "demo_enabled": os.getenv("OPS_DEMO_ENABLED", "true").lower() in {"1", "true", "yes"}, "version": "0.2.0"}
+            "demo_enabled": os.getenv("OPS_DEMO_ENABLED", "true").lower() in {"1", "true", "yes"}, "version": "0.3.0",
+            "remediation_configuration_error": remediation.config_error}
 
 
 @app.post("/api/diagnose", response_model=DiagnoseResponse)
